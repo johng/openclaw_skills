@@ -9,31 +9,31 @@ Check live Transport for London travel status. Use this when the user asks about
 
 ## Commands
 
-Run the script at `tfl-status/tfl.py` using `uv run`.
+Run the script at `{baseDir}/tfl.py` using `uv run`.
 
 **All lines status:**
 ```bash
-uv run tfl-status/tfl.py status
+uv run {baseDir}/tfl.py status
 ```
 
 **Specific lines:**
 ```bash
-uv run tfl-status/tfl.py status --line victoria,central,northern
+uv run {baseDir}/tfl.py status --line victoria,central,northern
 ```
 
 **Only disruptions (skip lines running normally):**
 ```bash
-uv run tfl-status/tfl.py disruptions
+uv run {baseDir}/tfl.py disruptions
 ```
 
 **Detail on one line:**
 ```bash
-uv run tfl-status/tfl.py line northern
+uv run {baseDir}/tfl.py line northern
 ```
 
 **JSON output (append --json before the subcommand):**
 ```bash
-uv run tfl-status/tfl.py --json status
+uv run {baseDir}/tfl.py --json status
 ```
 
 ## Line names
