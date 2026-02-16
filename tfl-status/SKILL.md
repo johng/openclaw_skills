@@ -2,7 +2,7 @@
 name: tfl-status
 description: Check TFL rail line status, disruptions, and delays. Covers tube, DLR, overground, and elizabeth line.
 user-invocable: true
-metadata: {"openclaw":{"requires":{"anyBins":["uv"]},"emoji":"🚇"}}
+metadata: {"openclaw":{"emoji":"🚇"}}
 ---
 
 Check live Transport for London travel status. Use this when the user asks about London transport, tube status, train delays, or disruptions.
