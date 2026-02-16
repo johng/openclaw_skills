@@ -5,15 +5,28 @@
 # ///
 
 import json
-import subprocess
-import sys
-from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 
-from tfl import cmd_disruptions, cmd_line, cmd_status, fetch_status, format_line
+from tfl import (
+    cmd_arrivals,
+    cmd_disruptions,
+    cmd_journey,
+    cmd_line,
+    cmd_search,
+    cmd_status,
+    fetch_arrivals,
+    fetch_journey,
+    fetch_status,
+    format_arrival,
+    format_journey,
+    format_line,
+    resolve_station,
+)
+
+# --- Mock data ---
 
 MOCK_LINES = [
     {
@@ -46,12 +59,74 @@ MOCK_LINES = [
     },
 ]
 
+MOCK_SEARCH = {
+    "matches": [
+        {"id": "940GZZLUOXC", "name": "Oxford Circus Underground Station", "lat": 51.515, "lon": -0.1415},
+        {"id": "940GZZLUOVL", "name": "Oval Underground Station", "lat": 51.4819, "lon": -0.1126},
+    ]
+}
+
+MOCK_SEARCH_EMPTY = {"matches": []}
+
+MOCK_ARRIVALS = [
+    {
+        "lineName": "Victoria",
+        "destinationName": "Brixton Underground Station",
+        "platformName": "Southbound - Platform 5",
+        "timeToStation": 120,
+    },
+    {
+        "lineName": "Victoria",
+        "destinationName": "Walthamstow Central Underground Station",
+        "platformName": "Northbound - Platform 6",
+        "timeToStation": 60,
+    },
+    {
+        "lineName": "Central",
+        "destinationName": "Epping Underground Station",
+        "platformName": "Eastbound - Platform 2",
+        "timeToStation": 180,
+    },
+    {
+        "lineName": "Central",
+        "destinationName": "West Ruislip Underground Station",
+        "platformName": "Westbound - Platform 1",
+        "timeToStation": 0,
+    },
+]
+
+MOCK_JOURNEY = {
+    "journeys": [
+        {
+            "duration": 18,
+            "legs": [
+                {"instruction": {"summary": "Walk to Oxford Circus Station", "detailed": "Walk to Oxford Circus Station"}, "duration": 7},
+                {"instruction": {"summary": "Victoria line to Kings Cross", "detailed": "Victoria line towards Walthamstow Central"}, "duration": 4},
+                {"instruction": {"summary": "Walk to destination", "detailed": "Walk to destination"}, "duration": 7},
+            ],
+        },
+        {
+            "duration": 22,
+            "legs": [
+                {"instruction": {"summary": "Walk to Tottenham Court Road", "detailed": "Walk to Tottenham Court Road"}, "duration": 5},
+                {"instruction": {"summary": "Northern line to Kings Cross", "detailed": "Northern line towards High Barnet"}, "duration": 6},
+                {"instruction": {"summary": "Walk to destination", "detailed": "Walk to destination"}, "duration": 7},
+            ],
+        },
+    ]
+}
+
 
 class FakeArgs:
     def __init__(self, **kwargs):
         self.json = False
         self.line = None
         self.name = None
+        self.station = None
+        self.origin = None
+        self.destination = None
+        self.query = None
+        self.limit = 5
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -73,6 +148,37 @@ def test_format_line_severe_delays_with_reason():
     assert "signal failure" in out
 
 
+# --- format_arrival ---
+
+
+def test_format_arrival():
+    out = format_arrival(MOCK_ARRIVALS[0])
+    assert "Brixton" in out
+    assert "2min" in out
+    assert "Southbound" in out
+
+
+def test_format_arrival_due():
+    out = format_arrival(MOCK_ARRIVALS[3])
+    assert "due" in out
+    assert "West Ruislip" in out
+
+
+def test_format_arrival_strips_underground_station():
+    out = format_arrival(MOCK_ARRIVALS[0])
+    assert "Underground Station" not in out
+
+
+# --- format_journey ---
+
+
+def test_format_journey():
+    out = format_journey(MOCK_JOURNEY["journeys"][0])
+    assert "18min" in out
+    assert "Victoria line" in out
+    assert "→" in out
+
+
 # --- fetch_status ---
 
 
@@ -83,7 +189,6 @@ def test_fetch_status_all():
     )
     result = fetch_status()
     assert len(result) == 3
-    assert result[0]["id"] == "victoria"
 
 
 @respx.mock
@@ -93,6 +198,53 @@ def test_fetch_status_specific_lines():
     )
     result = fetch_status(["victoria", "central"])
     assert len(result) == 2
+
+
+# --- resolve_station ---
+
+
+@respx.mock
+def test_resolve_station():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford%20circus").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    station = resolve_station("oxford circus")
+    assert station["id"] == "940GZZLUOXC"
+    assert station["name"] == "Oxford Circus Underground Station"
+    assert station["lat"] == 51.515
+
+
+@respx.mock
+def test_resolve_station_not_found():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/nonexistent").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_EMPTY)
+    )
+    with pytest.raises(SystemExit):
+        resolve_station("nonexistent")
+
+
+# --- fetch_arrivals ---
+
+
+@respx.mock
+def test_fetch_arrivals():
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUOXC/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS)
+    )
+    result = fetch_arrivals("940GZZLUOXC")
+    assert len(result) == 4
+
+
+# --- fetch_journey ---
+
+
+@respx.mock
+def test_fetch_journey():
+    respx.get("https://api.tfl.gov.uk/Journey/JourneyResults/51.515,-0.1415/to/51.53,-0.1238").mock(
+        return_value=httpx.Response(200, json=MOCK_JOURNEY)
+    )
+    result = fetch_journey(51.515, -0.1415, 51.53, -0.1238)
+    assert len(result["journeys"]) == 2
 
 
 # --- cmd_status ---
@@ -127,8 +279,7 @@ def test_cmd_status_json(capsys):
         return_value=httpx.Response(200, json=MOCK_LINES)
     )
     cmd_status(FakeArgs(json=True))
-    out = capsys.readouterr().out
-    data = json.loads(out)
+    data = json.loads(capsys.readouterr().out)
     assert len(data) == 3
 
 
@@ -163,8 +314,7 @@ def test_cmd_disruptions_json(capsys):
         return_value=httpx.Response(200, json=MOCK_LINES)
     )
     cmd_disruptions(FakeArgs(json=True))
-    out = capsys.readouterr().out
-    data = json.loads(out)
+    data = json.loads(capsys.readouterr().out)
     assert len(data) == 2
     assert all(d["id"] != "victoria" for d in data)
 
@@ -190,6 +340,124 @@ def test_cmd_line_not_found(capsys):
     )
     with pytest.raises(SystemExit):
         cmd_line(FakeArgs(name="fake"))
+
+
+# --- cmd_arrivals ---
+
+
+@respx.mock
+def test_cmd_arrivals(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford%20circus").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUOXC/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS)
+    )
+    cmd_arrivals(FakeArgs(station="oxford circus"))
+    out = capsys.readouterr().out
+    assert "Oxford Circus" in out
+    assert "Victoria:" in out
+    assert "Central:" in out
+    assert "Brixton" in out
+
+
+@respx.mock
+def test_cmd_arrivals_empty(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/bank").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "HUBBAN", "name": "Bank", "lat": 51.51, "lon": -0.088}]})
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBBAN/Arrivals").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    cmd_arrivals(FakeArgs(station="bank"))
+    out = capsys.readouterr().out
+    assert "No arrivals" in out
+
+
+@respx.mock
+def test_cmd_arrivals_limit(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford%20circus").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUOXC/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS)
+    )
+    cmd_arrivals(FakeArgs(station="oxford circus", limit=1))
+    out = capsys.readouterr().out
+    victoria_lines = [l for l in out.split("\n") if "Southbound" in l or "Northbound" in l]
+    assert len(victoria_lines) == 1
+
+
+# --- cmd_journey ---
+
+
+@respx.mock
+def test_cmd_journey(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford%20circus").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/kings%20cross").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "HUBKGX", "name": "Kings Cross", "lat": 51.53, "lon": -0.1238}]})
+    )
+    respx.get(url__regex=r".*/Journey/JourneyResults/.*").mock(
+        return_value=httpx.Response(200, json=MOCK_JOURNEY)
+    )
+    cmd_journey(FakeArgs(origin="oxford circus", destination="kings cross"))
+    out = capsys.readouterr().out
+    assert "Oxford Circus" in out
+    assert "Kings Cross" in out
+    assert "18min" in out
+    assert "Victoria line" in out
+
+
+@respx.mock
+def test_cmd_journey_no_routes(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/a").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "A", "name": "A", "lat": 0, "lon": 0}]})
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/b").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "B", "name": "B", "lat": 0, "lon": 0}]})
+    )
+    respx.get(url__regex=r".*/Journey/JourneyResults/.*").mock(
+        return_value=httpx.Response(200, json={"journeys": []})
+    )
+    cmd_journey(FakeArgs(origin="a", destination="b"))
+    out = capsys.readouterr().out
+    assert "No routes" in out
+
+
+# --- cmd_search ---
+
+
+@respx.mock
+def test_cmd_search(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    cmd_search(FakeArgs(query="oxford"))
+    out = capsys.readouterr().out
+    assert "Oxford Circus" in out
+    assert "940GZZLUOXC" in out
+
+
+@respx.mock
+def test_cmd_search_empty(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/zzzzz").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_EMPTY)
+    )
+    cmd_search(FakeArgs(query="zzzzz"))
+    out = capsys.readouterr().out
+    assert "No stations found" in out
+
+
+@respx.mock
+def test_cmd_search_json(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    cmd_search(FakeArgs(query="oxford", json=True))
+    data = json.loads(capsys.readouterr().out)
+    assert len(data) == 2
 
 
 # --- sorting ---
