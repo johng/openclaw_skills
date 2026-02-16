@@ -11,18 +11,24 @@ import pytest
 import respx
 
 from tfl import (
+    _busyness_label,
     cmd_arrivals,
+    cmd_busyness,
+    cmd_busyness_pattern,
     cmd_disruptions,
     cmd_journey,
     cmd_line,
     cmd_search,
     cmd_status,
     fetch_arrivals,
+    fetch_crowding_day,
+    fetch_crowding_live,
     fetch_journey,
     fetch_status,
     format_arrival,
     format_journey,
     format_line,
+    normalize_line,
     resolve_station,
 )
 
@@ -117,6 +123,50 @@ MOCK_JOURNEY = {
 }
 
 
+MOCK_SEARCH_HUB = {
+    "matches": [
+        {"id": "HUBBAN", "name": "Bank", "lat": 51.51, "lon": -0.088},
+    ]
+}
+
+MOCK_HUB_STOP = {
+    "children": [
+        {"id": "940GZZDLBNK", "commonName": "Bank DLR Station"},
+        {"id": "940GZZLUBNK", "commonName": "Bank Underground Station"},
+    ]
+}
+
+MOCK_CROWDING_LIVE = {
+    "dataAvailable": True,
+    "percentageOfBaseline": 0.45,
+    "timeUtc": "2026-02-16T12:00:00.000Z",
+    "timeLocal": "2026-02-16 12:00:00",
+}
+
+MOCK_CROWDING_LIVE_UNAVAILABLE = {
+    "dataAvailable": False,
+    "percentageOfBaseline": 0,
+    "timeUtc": None,
+    "timeLocal": None,
+}
+
+MOCK_CROWDING_DAY = {
+    "naptan": "940GZZLUBNK",
+    "daysOfWeek": [
+        {
+            "dayOfWeek": "MON",
+            "amPeakTimeBand": "07:45-09:45",
+            "pmPeakTimeBand": "17:00-19:00",
+            "timeBands": [
+                {"timeBand": "08:00-08:15", "percentageOfBaseLine": 0.40},
+                {"timeBand": "08:15-08:30", "percentageOfBaseLine": 0.50},
+                {"timeBand": "12:00-12:15", "percentageOfBaseLine": 0.20},
+            ],
+        },
+    ],
+}
+
+
 class FakeArgs:
     def __init__(self, **kwargs):
         self.json = False
@@ -127,6 +177,7 @@ class FakeArgs:
         self.destination = None
         self.query = None
         self.limit = 5
+        self.day = None
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -151,22 +202,35 @@ def test_format_line_severe_delays_with_reason():
 # --- format_arrival ---
 
 
-def test_format_arrival():
+def test_format_arrival_direction_dest_time():
     out = format_arrival(MOCK_ARRIVALS[0])
-    assert "Brixton" in out
+    assert "Southbound → Brixton" in out
     assert "2min" in out
-    assert "Southbound" in out
+    assert "(Platform 5)" in out
 
 
 def test_format_arrival_due():
     out = format_arrival(MOCK_ARRIVALS[3])
     assert "due" in out
     assert "West Ruislip" in out
+    assert "Westbound →" in out
 
 
 def test_format_arrival_strips_underground_station():
     out = format_arrival(MOCK_ARRIVALS[0])
     assert "Underground Station" not in out
+
+
+def test_format_arrival_no_direction():
+    arrival = {
+        "lineName": "DLR",
+        "destinationName": "Lewisham",
+        "platformName": "Platform 1",
+        "timeToStation": 90,
+    }
+    out = format_arrival(arrival)
+    assert "Lewisham - 1min (Platform 1)" in out
+    assert "→" not in out
 
 
 # --- format_journey ---
@@ -177,6 +241,23 @@ def test_format_journey():
     assert "18min" in out
     assert "Victoria line" in out
     assert "→" in out
+
+
+def test_format_journey_with_times_and_fare():
+    journey = {
+        "duration": 25,
+        "startDateTime": "2026-02-16T09:30:00",
+        "arrivalDateTime": "2026-02-16T09:55:00",
+        "fare": {"totalCost": 290},
+        "legs": [
+            {"instruction": {"summary": "Victoria line to Green Park"}},
+        ],
+    }
+    out = format_journey(journey)
+    assert "25min" in out
+    assert "depart 09:30" in out
+    assert "arrive 09:55" in out
+    assert "£2.90" in out
 
 
 # --- fetch_status ---
@@ -212,6 +293,20 @@ def test_resolve_station():
     assert station["id"] == "940GZZLUOXC"
     assert station["name"] == "Oxford Circus Underground Station"
     assert station["lat"] == 51.515
+    assert station["naptan"] == "940GZZLUOXC"
+
+
+@respx.mock
+def test_resolve_station_hub_to_naptan():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/bank").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_HUB)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBBAN").mock(
+        return_value=httpx.Response(200, json=MOCK_HUB_STOP)
+    )
+    station = resolve_station("bank")
+    assert station["id"] == "HUBBAN"
+    assert station["naptan"] == "940GZZLUBNK"
 
 
 @respx.mock
@@ -363,9 +458,7 @@ def test_cmd_arrivals(capsys):
 
 @respx.mock
 def test_cmd_arrivals_empty(capsys):
-    respx.get("https://api.tfl.gov.uk/StopPoint/Search/bank").mock(
-        return_value=httpx.Response(200, json={"matches": [{"id": "HUBBAN", "name": "Bank", "lat": 51.51, "lon": -0.088}]})
-    )
+    _mock_hub_resolve()
     respx.get("https://api.tfl.gov.uk/StopPoint/HUBBAN/Arrivals").mock(
         return_value=httpx.Response(200, json=[])
     )
@@ -399,6 +492,9 @@ def test_cmd_journey(capsys):
     respx.get("https://api.tfl.gov.uk/StopPoint/Search/kings%20cross").mock(
         return_value=httpx.Response(200, json={"matches": [{"id": "HUBKGX", "name": "Kings Cross", "lat": 51.53, "lon": -0.1238}]})
     )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBKGX").mock(
+        return_value=httpx.Response(200, json={"children": [{"id": "940GZZLUKSX", "commonName": "Kings Cross Underground"}]})
+    )
     respx.get(url__regex=r".*/Journey/JourneyResults/.*").mock(
         return_value=httpx.Response(200, json=MOCK_JOURNEY)
     )
@@ -413,10 +509,10 @@ def test_cmd_journey(capsys):
 @respx.mock
 def test_cmd_journey_no_routes(capsys):
     respx.get("https://api.tfl.gov.uk/StopPoint/Search/a").mock(
-        return_value=httpx.Response(200, json={"matches": [{"id": "A", "name": "A", "lat": 0, "lon": 0}]})
+        return_value=httpx.Response(200, json={"matches": [{"id": "A", "name": "A", "lat": 51.5, "lon": -0.1}]})
     )
     respx.get("https://api.tfl.gov.uk/StopPoint/Search/b").mock(
-        return_value=httpx.Response(200, json={"matches": [{"id": "B", "name": "B", "lat": 0, "lon": 0}]})
+        return_value=httpx.Response(200, json={"matches": [{"id": "B", "name": "B", "lat": 51.6, "lon": -0.2}]})
     )
     respx.get(url__regex=r".*/Journey/JourneyResults/.*").mock(
         return_value=httpx.Response(200, json={"journeys": []})
@@ -424,6 +520,18 @@ def test_cmd_journey_no_routes(capsys):
     cmd_journey(FakeArgs(origin="a", destination="b"))
     out = capsys.readouterr().out
     assert "No routes" in out
+
+
+@respx.mock
+def test_cmd_journey_bad_coordinates():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/nowhere").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "X", "name": "Nowhere", "lat": 0, "lon": 0}]})
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/somewhere").mock(
+        return_value=httpx.Response(200, json={"matches": [{"id": "Y", "name": "Somewhere", "lat": 51.5, "lon": -0.1}]})
+    )
+    with pytest.raises(SystemExit):
+        cmd_journey(FakeArgs(origin="nowhere", destination="somewhere"))
 
 
 # --- cmd_search ---
@@ -473,3 +581,140 @@ def test_status_sorted_worst_first(capsys):
     lines = [l for l in out.strip().split("\n") if not l.startswith("   ")]
     assert "Northern" in lines[0]
     assert "Victoria" in lines[-1]
+
+
+# --- busyness label ---
+
+
+def test_busyness_label_quiet():
+    assert "Quiet" in _busyness_label(0.1)
+
+
+def test_busyness_label_moderate():
+    assert "Moderate" in _busyness_label(0.35)
+
+
+def test_busyness_label_busy():
+    assert "Busy" in _busyness_label(0.65)
+
+
+def test_busyness_label_very_busy():
+    assert "Very busy" in _busyness_label(0.9)
+
+
+# --- cmd_busyness ---
+
+
+def _mock_hub_resolve():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/bank").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_HUB)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBBAN").mock(
+        return_value=httpx.Response(200, json=MOCK_HUB_STOP)
+    )
+
+
+@respx.mock
+def test_cmd_busyness_live(capsys):
+    _mock_hub_resolve()
+    respx.get("https://api.tfl.gov.uk/Crowding/940GZZLUBNK/Live").mock(
+        return_value=httpx.Response(200, json=MOCK_CROWDING_LIVE)
+    )
+    cmd_busyness(FakeArgs(station="bank"))
+    out = capsys.readouterr().out
+    assert "Bank" in out
+    assert "Live busyness" in out
+    assert "Moderate" in out
+    assert "45%" in out
+
+
+@respx.mock
+def test_cmd_busyness_no_live_data(capsys):
+    _mock_hub_resolve()
+    respx.get("https://api.tfl.gov.uk/Crowding/940GZZLUBNK/Live").mock(
+        return_value=httpx.Response(200, json=MOCK_CROWDING_LIVE_UNAVAILABLE)
+    )
+    cmd_busyness(FakeArgs(station="bank"))
+    out = capsys.readouterr().out
+    assert "No live data" in out
+
+
+@respx.mock
+def test_cmd_busyness_json(capsys):
+    _mock_hub_resolve()
+    respx.get("https://api.tfl.gov.uk/Crowding/940GZZLUBNK/Live").mock(
+        return_value=httpx.Response(200, json=MOCK_CROWDING_LIVE)
+    )
+    cmd_busyness(FakeArgs(station="bank", json=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["dataAvailable"] is True
+
+
+# --- cmd_busyness_pattern ---
+
+
+@respx.mock
+def test_cmd_busyness_pattern(capsys):
+    _mock_hub_resolve()
+    respx.get("https://api.tfl.gov.uk/Crowding/940GZZLUBNK").mock(
+        return_value=httpx.Response(200, json=MOCK_CROWDING_DAY)
+    )
+    cmd_busyness_pattern(FakeArgs(station="bank", day="monday"))
+    out = capsys.readouterr().out
+    assert "Typical monday" in out
+    assert "AM peak" in out
+    assert "08:15-08:30" in out
+
+
+@respx.mock
+def test_cmd_busyness_pattern_no_data(capsys):
+    _mock_hub_resolve()
+    respx.get("https://api.tfl.gov.uk/Crowding/940GZZLUBNK").mock(
+        return_value=httpx.Response(200, json=MOCK_CROWDING_DAY)
+    )
+    cmd_busyness_pattern(FakeArgs(station="bank", day="sunday"))
+    out = capsys.readouterr().out
+    assert "No data for sunday" in out
+
+
+# --- normalize_line ---
+
+
+def test_normalize_line_simple():
+    assert normalize_line("victoria") == "victoria"
+
+
+def test_normalize_line_strips_line_suffix():
+    assert normalize_line("Victoria Line") == "victoria"
+    assert normalize_line("northern line") == "northern"
+
+
+def test_normalize_line_aliases():
+    assert normalize_line("hammersmith and city") == "hammersmith-city"
+    assert normalize_line("hammersmith & city") == "hammersmith-city"
+    assert normalize_line("waterloo and city") == "waterloo-city"
+    assert normalize_line("elizabeth line") == "elizabeth-line"
+    assert normalize_line("london overground") == "london-overground"
+
+
+def test_normalize_line_whitespace():
+    assert normalize_line("  victoria  ") == "victoria"
+
+
+# --- arrivals --line filter ---
+
+
+@respx.mock
+def test_cmd_arrivals_line_filter(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/oxford%20circus").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUOXC/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS)
+    )
+    cmd_arrivals(FakeArgs(station="oxford circus", line="Victoria"))
+    out = capsys.readouterr().out
+    assert "Victoria:" in out
+    assert "Brixton" in out
+    assert "Central:" not in out
+    assert "Epping" not in out

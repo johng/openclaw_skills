@@ -1,6 +1,6 @@
 ---
 name: tfl-status
-description: Check TFL rail line status, disruptions, delays, live arrivals, and journey planning. Covers tube, DLR, overground, and elizabeth line.
+description: Check TFL rail line status, disruptions, delays, live arrivals, journey planning, and station busyness. Covers tube, DLR, overground, and elizabeth line.
 user-invocable: true
 metadata: {"openclaw":{"emoji":"🚇"}}
 ---
@@ -35,6 +35,7 @@ uv run {baseDir}/tfl.py line northern
 ```bash
 uv run {baseDir}/tfl.py arrivals "oxford circus"
 uv run {baseDir}/tfl.py arrivals "bank" --limit 3
+uv run {baseDir}/tfl.py arrivals "oxford circus" --line victoria
 ```
 
 **Plan a journey:**
@@ -48,15 +49,25 @@ uv run {baseDir}/tfl.py journey "waterloo" "canary wharf" --limit 2
 uv run {baseDir}/tfl.py search "paddington"
 ```
 
-**JSON output (append --json before the subcommand):**
+**Live busyness at a station:**
+```bash
+uv run {baseDir}/tfl.py busyness "bank"
+```
+
+**Typical busyness pattern for a day:**
+```bash
+uv run {baseDir}/tfl.py busyness-pattern "bank" monday
+```
+
+**JSON output (--json works anywhere):**
 ```bash
 uv run {baseDir}/tfl.py --json status
-uv run {baseDir}/tfl.py --json arrivals "bank"
+uv run {baseDir}/tfl.py arrivals "bank" --json
 ```
 
 ## Line names
 
-Use lowercase: bakerloo, central, circle, district, hammersmith-city, jubilee, metropolitan, northern, piccadilly, victoria, waterloo-city, dlr, london-overground, elizabeth, tram
+Natural names work: "hammersmith and city", "elizabeth line", "waterloo & city" are all accepted. Canonical lowercase: bakerloo, central, circle, district, hammersmith-city, jubilee, metropolitan, northern, piccadilly, victoria, waterloo-city, dlr, london-overground, elizabeth, tram
 
 ## When to use which command
 
@@ -65,5 +76,8 @@ Use lowercase: bakerloo, central, circle, district, hammersmith-city, jubilee, m
 - User wants the full picture → `status`
 - User names multiple lines → `status --line line1,line2`
 - User asks "when's the next train?" → `arrivals "<station>"`
+- User asks about arrivals on a specific line → `arrivals "<station>" --line <line>`
 - User asks "how do I get from X to Y?" → `journey "<from>" "<to>"`
 - User asks about a station name or ID → `search "<query>"`
+- User asks "how busy is X?" → `busyness "<station>"` (live, right now)
+- User asks "when is X busiest?" → `busyness-pattern "<station>" <day>`
