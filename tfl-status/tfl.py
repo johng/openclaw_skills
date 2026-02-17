@@ -14,7 +14,8 @@ from itertools import groupby
 import httpx
 
 API_BASE = "https://api.tfl.gov.uk"
-APP_KEY = os.environ.get("TFL_APP_KEY", "")
+_raw_key = os.environ.get("TFL_APP_KEY", "")
+APP_KEY = "" if _raw_key.upper() in ("", "NA", "N/A", "NONE", "SKIP") else _raw_key
 MODES = "tube,dlr,overground,elizabeth-line"
 
 SEVERITY = {

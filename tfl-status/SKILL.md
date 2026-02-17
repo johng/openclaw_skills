@@ -2,7 +2,7 @@
 name: tfl-status
 description: Check TFL rail line status, disruptions, delays, live arrivals, journey planning, and station busyness. Covers tube, DLR, overground, and elizabeth line.
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🚇","primaryEnv":"TFL_APP_KEY"}}
+metadata: {"openclaw":{"emoji":"🚇","requires":{"env":["TFL_APP_KEY"]},"primaryEnv":"TFL_APP_KEY"}}
 ---
 
 Check live Transport for London travel status. Use this when the user asks about London transport, tube status, train delays, disruptions, next trains, or journey planning.
@@ -69,7 +69,7 @@ uv run {baseDir}/tfl.py arrivals "bank" --json
 
 Natural names work: "hammersmith and city", "elizabeth line", "waterloo & city", "overground" are all accepted. Canonical lowercase: bakerloo, central, circle, district, hammersmith-city, jubilee, metropolitan, northern, piccadilly, victoria, waterloo-city, dlr, elizabeth, liberty, lioness, mildmay, suffragette, weaver, windrush, tram
 
-Set `TFL_APP_KEY` env var for higher rate limits (500 req/min vs ~30). Get a free key at https://api-portal.tfl.gov.uk/products
+Requires `TFL_APP_KEY`. Get a free key at https://api-portal.tfl.gov.uk/products (500 req/min). Set to `NA` if you don't have one (works without, ~30 req/min).
 
 ## When to use which command
 
