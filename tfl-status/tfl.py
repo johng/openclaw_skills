@@ -226,7 +226,7 @@ def cmd_line(args: argparse.Namespace) -> None:
 # Fix #3: Add --line filter to arrivals
 def cmd_arrivals(args: argparse.Namespace) -> None:
     station = resolve_station(args.station)
-    data = fetch_arrivals(station["id"])
+    data = fetch_arrivals(station["naptan"])
 
     # Filter by line if specified
     if args.line:

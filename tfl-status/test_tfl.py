@@ -459,7 +459,7 @@ def test_cmd_arrivals(capsys):
 @respx.mock
 def test_cmd_arrivals_empty(capsys):
     _mock_hub_resolve()
-    respx.get("https://api.tfl.gov.uk/StopPoint/HUBBAN/Arrivals").mock(
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUBNK/Arrivals").mock(
         return_value=httpx.Response(200, json=[])
     )
     cmd_arrivals(FakeArgs(station="bank"))
