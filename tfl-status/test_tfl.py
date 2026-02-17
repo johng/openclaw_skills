@@ -693,8 +693,10 @@ def test_normalize_line_aliases():
     assert normalize_line("hammersmith and city") == "hammersmith-city"
     assert normalize_line("hammersmith & city") == "hammersmith-city"
     assert normalize_line("waterloo and city") == "waterloo-city"
-    assert normalize_line("elizabeth line") == "elizabeth-line"
-    assert normalize_line("london overground") == "london-overground"
+    assert normalize_line("elizabeth line") == "elizabeth"
+    assert normalize_line("elizabeth-line") == "elizabeth"
+    assert normalize_line("london overground") == "liberty,lioness,mildmay,suffragette,weaver,windrush"
+    assert normalize_line("overground") == "liberty,lioness,mildmay,suffragette,weaver,windrush"
 
 
 def test_normalize_line_whitespace():
