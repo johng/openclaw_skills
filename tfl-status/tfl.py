@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 from itertools import groupby
@@ -13,6 +14,7 @@ from itertools import groupby
 import httpx
 
 API_BASE = "https://api.tfl.gov.uk"
+APP_KEY = os.environ.get("TFL_APP_KEY", "")
 MODES = "tube,dlr,overground,elizabeth-line"
 
 SEVERITY = {
@@ -43,8 +45,10 @@ LINE_ALIASES = {
     "hammersmith & city": "hammersmith-city",
     "waterloo and city": "waterloo-city",
     "waterloo & city": "waterloo-city",
-    "london overground": "london-overground",
-    "elizabeth line": "elizabeth-line",
+    "elizabeth line": "elizabeth",
+    "elizabeth-line": "elizabeth",
+    "london overground": "liberty,lioness,mildmay,suffragette,weaver,windrush",
+    "overground": "liberty,lioness,mildmay,suffragette,weaver,windrush",
 }
 
 
@@ -57,6 +61,9 @@ def normalize_line(name: str) -> str:
 
 
 def _get(path: str, params: dict | None = None) -> dict | list:
+    params = dict(params) if params else {}
+    if APP_KEY:
+        params["app_key"] = APP_KEY
     resp = httpx.get(f"{API_BASE}{path}", params=params, timeout=10)
     resp.raise_for_status()
     return resp.json()
