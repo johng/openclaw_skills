@@ -74,7 +74,7 @@ def _get(path: str, params: dict | None = None) -> dict | list:
 
 
 def resolve_station(query: str) -> dict:
-    """Search for a station by name. Returns {id, name, lat, lon, naptan}."""
+    """Search for a station by name. Returns {id, name, lat, lon, naptan, stop_ids}."""
     data = _get(f"/StopPoint/Search/{query}", {"modes": MODES})
     matches = data.get("matches", [])
     if not matches:
@@ -83,19 +83,28 @@ def resolve_station(query: str) -> dict:
     best = matches[0]
     station_id = best["id"]
     naptan = station_id
+    stop_ids = [station_id]
     # HUB IDs don't work with Crowding API - resolve to naptan child
+    # Arrivals need all child stop IDs (tube, DLR, elizabeth/overground)
     if station_id.startswith("HUB"):
         stop = _get(f"/StopPoint/{station_id}")
+        stop_ids = []
         for child in stop.get("children", []):
-            if child["id"].startswith("940GZZLU"):
-                naptan = child["id"]
-                break
+            cid = child["id"]
+            if cid.startswith("940GZZLU"):
+                naptan = cid
+                stop_ids.append(cid)
+            elif cid.startswith(("940GZZDL", "910G")):
+                stop_ids.append(cid)
+        if not stop_ids:
+            stop_ids = [station_id]
     return {
         "id": station_id,
         "name": best["name"],
         "lat": best.get("lat", 0),
         "lon": best.get("lon", 0),
         "naptan": naptan,
+        "stop_ids": stop_ids,
     }
 
 
@@ -234,12 +243,15 @@ def cmd_line(args: argparse.Namespace) -> None:
 # Fix #3: Add --line filter to arrivals
 def cmd_arrivals(args: argparse.Namespace) -> None:
     station = resolve_station(args.station)
-    data = fetch_arrivals(station["naptan"])
+    # Fetch arrivals from all child stop points (tube, DLR, elizabeth/overground)
+    data = []
+    for stop_id in station["stop_ids"]:
+        data.extend(fetch_arrivals(stop_id))
 
     # Filter by line if specified
     if args.line:
         filter_lines = {normalize_line(l).lower() for l in args.line.split(",")}
-        data = [a for a in data if a.get("lineName", "").lower() in filter_lines]
+        data = [a for a in data if normalize_line(a.get("lineName", "")) in filter_lines]
 
     if args.json:
         print(json.dumps(data, indent=2))
