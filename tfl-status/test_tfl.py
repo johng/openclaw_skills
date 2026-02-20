@@ -294,6 +294,7 @@ def test_resolve_station():
     assert station["name"] == "Oxford Circus Underground Station"
     assert station["lat"] == 51.515
     assert station["naptan"] == "940GZZLUOXC"
+    assert station["stop_ids"] == ["940GZZLUOXC"]
 
 
 @respx.mock
@@ -307,6 +308,8 @@ def test_resolve_station_hub_to_naptan():
     station = resolve_station("bank")
     assert station["id"] == "HUBBAN"
     assert station["naptan"] == "940GZZLUBNK"
+    assert "940GZZLUBNK" in station["stop_ids"]
+    assert "940GZZDLBNK" in station["stop_ids"]
 
 
 @respx.mock
@@ -460,6 +463,9 @@ def test_cmd_arrivals(capsys):
 def test_cmd_arrivals_empty(capsys):
     _mock_hub_resolve()
     respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUBNK/Arrivals").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZDLBNK/Arrivals").mock(
         return_value=httpx.Response(200, json=[])
     )
     cmd_arrivals(FakeArgs(station="bank"))
@@ -720,3 +726,97 @@ def test_cmd_arrivals_line_filter(capsys):
     assert "Brixton" in out
     assert "Central:" not in out
     assert "Epping" not in out
+
+
+MOCK_SEARCH_STRATFORD = {
+    "matches": [
+        {"id": "HUBSRA", "name": "Stratford", "lat": 51.54, "lon": -0.003},
+    ]
+}
+
+MOCK_HUB_STRATFORD = {
+    "children": [
+        {"id": "910GSTFD", "commonName": "Stratford Rail Station"},
+        {"id": "940GZZDLSTD", "commonName": "Stratford DLR Station"},
+        {"id": "940GZZLUSTD", "commonName": "Stratford Underground Station"},
+    ]
+}
+
+MOCK_ELIZABETH_ARRIVALS = [
+    {
+        "lineName": "Elizabeth line",
+        "destinationName": "Shenfield Rail Station",
+        "platformName": "Platform 8",
+        "timeToStation": 120,
+    },
+    {
+        "lineName": "Elizabeth line",
+        "destinationName": "Paddington",
+        "platformName": "Platform 5",
+        "timeToStation": 300,
+    },
+]
+
+
+@respx.mock
+def test_resolve_station_hub_includes_rail():
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/stratford").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_STRATFORD)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBSRA").mock(
+        return_value=httpx.Response(200, json=MOCK_HUB_STRATFORD)
+    )
+    station = resolve_station("stratford")
+    assert station["id"] == "HUBSRA"
+    assert "910GSTFD" in station["stop_ids"]
+    assert "940GZZLUSTD" in station["stop_ids"]
+    assert "940GZZDLSTD" in station["stop_ids"]
+
+
+@respx.mock
+def test_cmd_arrivals_elizabeth_line(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/stratford").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_STRATFORD)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBSRA").mock(
+        return_value=httpx.Response(200, json=MOCK_HUB_STRATFORD)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUSTD/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS[:2])
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZDLSTD/Arrivals").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/910GSTFD/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ELIZABETH_ARRIVALS)
+    )
+    cmd_arrivals(FakeArgs(station="stratford"))
+    out = capsys.readouterr().out
+    assert "Stratford" in out
+    assert "Elizabeth line:" in out
+    assert "Shenfield" in out
+    assert "Victoria:" in out
+
+
+@respx.mock
+def test_cmd_arrivals_elizabeth_line_filter(capsys):
+    respx.get("https://api.tfl.gov.uk/StopPoint/Search/stratford").mock(
+        return_value=httpx.Response(200, json=MOCK_SEARCH_STRATFORD)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/HUBSRA").mock(
+        return_value=httpx.Response(200, json=MOCK_HUB_STRATFORD)
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZLUSTD/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ARRIVALS[:2])
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/940GZZDLSTD/Arrivals").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get("https://api.tfl.gov.uk/StopPoint/910GSTFD/Arrivals").mock(
+        return_value=httpx.Response(200, json=MOCK_ELIZABETH_ARRIVALS)
+    )
+    cmd_arrivals(FakeArgs(station="stratford", line="elizabeth line"))
+    out = capsys.readouterr().out
+    assert "Elizabeth line:" in out
+    assert "Shenfield" in out
+    assert "Victoria:" not in out
